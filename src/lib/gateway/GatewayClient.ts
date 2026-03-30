@@ -100,6 +100,22 @@ const parseConnectFailedCloseReason = (
 
 const DEFAULT_UPSTREAM_GATEWAY_URL =
   process.env.NEXT_PUBLIC_GATEWAY_URL || "ws://localhost:18789";
+const LOOPBACK_GATEWAY_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+
+const isLegacyProxyGatewayUrl = (value: string | null | undefined): boolean => {
+  const raw = value?.trim() ?? "";
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return (
+      (parsed.protocol === "ws:" || parsed.protocol === "wss:") &&
+      LOOPBACK_GATEWAY_HOSTNAMES.has(parsed.hostname.toLowerCase()) &&
+      parsed.pathname === "/api/gateway/ws"
+    );
+  } catch {
+    return false;
+  }
+};
 
 const normalizeLocalGatewayDefaults = (value: unknown): StudioGatewaySettings | null => {
   if (!value || typeof value !== "object") return null;
@@ -558,16 +574,23 @@ export const useGatewayConnection = (
         // localGatewayDefaults (from openclaw.json / CLAW3D_GATEWAY_URL)
         // over the build-time NEXT_PUBLIC_GATEWAY_URL which may be stale
         // or empty if the operator forgot to rebuild after .env changes.
-        const hasSavedUrl = Boolean(gateway?.url?.trim());
-        const resolvedUrl = hasSavedUrl
-          ? gateway!.url
-          : normalizedDefaults?.url || DEFAULT_UPSTREAM_GATEWAY_URL;
+        const savedGatewayUrl = gateway?.url?.trim() ?? "";
+        const hasSavedUrl = Boolean(savedGatewayUrl);
+        const shouldReplaceLegacyProxyUrl =
+          hasSavedUrl && isLegacyProxyGatewayUrl(savedGatewayUrl) && Boolean(normalizedDefaults?.url);
+        const resolvedUrl = shouldReplaceLegacyProxyUrl
+          ? normalizedDefaults!.url
+          : hasSavedUrl
+            ? gateway!.url
+            : normalizedDefaults?.url || DEFAULT_UPSTREAM_GATEWAY_URL;
         const nextGatewayUrl = resolvedUrl;
-        const nextToken = hasSavedUrl
-          ? (gateway && "token" in gateway && typeof gateway.token === "string"
-              ? gateway.token
-              : "")
-          : normalizedDefaults?.token ?? "";
+        const nextToken = shouldReplaceLegacyProxyUrl
+          ? normalizedDefaults?.token ?? ""
+          : hasSavedUrl
+            ? (gateway && "token" in gateway && typeof gateway.token === "string"
+                ? gateway.token
+                : "")
+            : normalizedDefaults?.token ?? "";
         loadedGatewaySettings.current = {
           gatewayUrl: nextGatewayUrl.trim(),
           token: nextToken,

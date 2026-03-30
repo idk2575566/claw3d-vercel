@@ -105,7 +105,89 @@ describe("createGatewayProxy", () => {
     }
   });
 
-  it("forwards upstream connect.challenge before browser connect and then passes nonce-based device auth", async () => {
+  it("still injects the shared gateway token when the browser sends signed device auth", async () => {
+    const upstream = new WebSocketServer({ port: 0 });
+    const address = upstream.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected upstream server to have a port");
+    }
+    const upstreamUrl = `ws://127.0.0.1:${address.port}`;
+
+    let seenToken: string | null = null;
+    let seenDeviceNonce: string | null = null;
+    upstream.on("connection", (ws) => {
+      ws.on("message", (raw) => {
+        const parsed = JSON.parse(String(raw));
+        if (parsed?.method === "connect") {
+          seenToken = parsed?.params?.auth?.token ?? null;
+          seenDeviceNonce = parsed?.params?.device?.nonce ?? null;
+          ws.send(
+            JSON.stringify({
+              type: "res",
+              id: parsed.id,
+              ok: true,
+              payload: { type: "hello-ok", protocol: 3, auth: {} },
+            })
+          );
+        }
+      });
+    });
+
+    const { createGatewayProxy } = await import("../../server/gateway-proxy");
+
+    const proxyHttp = await import("node:http").then((m) => m.createServer());
+    const proxy = createGatewayProxy({
+      loadUpstreamSettings: async () => ({ url: upstreamUrl, token: "shared-token-123" }),
+      allowWs: (req: { url?: string }) => req.url === "/api/gateway/ws",
+      logError: () => {},
+    });
+    proxyHttp.on("upgrade", (req, socket, head) => proxy.handleUpgrade(req, socket, head));
+
+    await new Promise<void>((resolve) => proxyHttp.listen(0, "127.0.0.1", resolve));
+    const proxyAddr = proxyHttp.address();
+    if (!proxyAddr || typeof proxyAddr === "string") {
+      throw new Error("expected proxy server to have a port");
+    }
+
+    const browser = new WebSocket(`ws://127.0.0.1:${proxyAddr.port}/api/gateway/ws`);
+    try {
+      await waitForEvent(browser, "open");
+
+      browser.send(
+        JSON.stringify({
+          type: "req",
+          id: "connect-device-auth-plus-token",
+          method: "connect",
+          params: {
+            device: {
+              id: "device-id-123",
+              publicKey: "device-public-key-123",
+              signature: "device-signature-123",
+              signedAt: Date.now(),
+              nonce: "strict-gateway-nonce",
+            },
+          },
+        })
+      );
+
+      const [rawMessage] = await waitForEvent<[WebSocket.RawData]>(browser, "message");
+      const response = JSON.parse(String(rawMessage ?? ""));
+      expect(response).toMatchObject({ type: "res", id: "connect-device-auth-plus-token", ok: true });
+      expect(seenToken).toBe("shared-token-123");
+      expect(seenDeviceNonce).toBeNull();
+    } finally {
+      for (const client of upstream.clients) {
+        client.close();
+      }
+      await Promise.all([
+        closeWebSocket(browser),
+        closeWebSocketServer(upstream),
+        closeHttpServer(proxyHttp),
+      ]);
+    }
+  });
+
+  it("forwards connect.challenge and then rejects device-only auth when no shared token is configured", async () => {
     const upstream = new WebSocketServer({ port: 0 });
     const address = upstream.address();
     if (!address || typeof address === "string") {
@@ -185,8 +267,13 @@ describe("createGatewayProxy", () => {
 
       const [rawMessage] = await waitForEvent<[WebSocket.RawData]>(browser, "message");
       const response = JSON.parse(String(rawMessage ?? ""));
-      expect(response).toMatchObject({ type: "res", id: "connect-after-challenge", ok: true });
-      expect(seenDeviceNonce).toBe("strict-gateway-nonce");
+      expect(response).toMatchObject({
+        type: "res",
+        id: "connect-after-challenge",
+        ok: false,
+        error: { code: "studio.gateway_token_missing" },
+      });
+      expect(seenDeviceNonce).toBeNull();
     } finally {
       for (const client of upstream.clients) {
         client.close();
@@ -339,7 +426,7 @@ describe("createGatewayProxy", () => {
     }
   });
 
-  it("allows browser device signature passthrough when host token is missing", async () => {
+  it("rejects browser device-only auth when the host token is missing", async () => {
     const upstream = new WebSocketServer({ port: 0 });
     const address = upstream.address();
     if (!address || typeof address === "string") {
@@ -413,12 +500,17 @@ describe("createGatewayProxy", () => {
 
       const [rawMessage] = await waitForEvent<[WebSocket.RawData]>(browser, "message");
       const response = JSON.parse(String(rawMessage ?? ""));
-      expect(response).toMatchObject({ type: "res", id: "connect-pass-device", ok: true });
-      expect(seenDeviceSignature).toBe("device-signature-123");
-      expect(seenDeviceId).toBe("device-id-123");
-      expect(seenDevicePublicKey).toBe("device-public-key-123");
-      expect(seenDeviceNonce).toBe("device-nonce-123");
-      expect(typeof seenDeviceSignedAt).toBe("number");
+      expect(response).toMatchObject({
+        type: "res",
+        id: "connect-pass-device",
+        ok: false,
+        error: { code: "studio.gateway_token_missing" },
+      });
+      expect(seenDeviceSignature).toBeNull();
+      expect(seenDeviceId).toBeNull();
+      expect(seenDevicePublicKey).toBeNull();
+      expect(seenDeviceNonce).toBeNull();
+      expect(seenDeviceSignedAt).toBeNull();
       expect(seenToken).toBeNull();
     } finally {
       for (const client of upstream.clients) {

@@ -36,7 +36,7 @@ describe("studio settings route", () => {
     expect(body.settings?.version).toBe(1);
   });
 
-  it("GET returns local gateway defaults from openclaw.json", async () => {
+  it("GET returns raw local gateway defaults for loopback Studio requests", async () => {
     tempDir = makeTempDir("studio-settings-get-local-defaults");
     process.env.OPENCLAW_STATE_DIR = tempDir;
     fs.writeFileSync(
@@ -45,7 +45,33 @@ describe("studio settings route", () => {
       "utf8"
     );
 
-    const response = await GET();
+    const response = await GET(new Request("http://127.0.0.1:3000/api/studio"));
+    const body = (await response.json()) as {
+      settings?: { gateway?: { url?: string; token?: string } | null };
+      localGatewayDefaults?: { url?: string; token?: string } | null;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.localGatewayDefaults).toEqual({
+      url: "ws://localhost:18791",
+      token: "local-token",
+    });
+    expect(body.settings?.gateway).toEqual({
+      url: "ws://localhost:18791",
+      token: "local-token",
+    });
+  });
+
+  it("GET keeps gateway tokens redacted for non-loopback Studio requests", async () => {
+    tempDir = makeTempDir("studio-settings-get-remote-redacted");
+    process.env.OPENCLAW_STATE_DIR = tempDir;
+    fs.writeFileSync(
+      path.join(tempDir, "openclaw.json"),
+      JSON.stringify({ gateway: { port: 18791, auth: { token: "local-token" } } }, null, 2),
+      "utf8"
+    );
+
+    const response = await GET(new Request("https://studio.example/api/studio"));
     const body = (await response.json()) as {
       settings?: { gateway?: { url?: string; tokenConfigured?: boolean } | null };
       localGatewayDefaults?: { url?: string; tokenConfigured?: boolean } | null;
@@ -94,10 +120,10 @@ describe("studio settings route", () => {
     } as unknown as Request);
     expect(putResponse.status).toBe(200);
 
-    const getResponse = await GET();
+    const getResponse = await GET(new Request("http://127.0.0.1:3000/api/studio"));
     const body = (await getResponse.json()) as {
       settings?: {
-        gateway?: { url?: string; tokenConfigured?: boolean } | null;
+        gateway?: { url?: string; token?: string } | null;
         office?: Record<string, { title?: string }>;
       };
     };
@@ -105,7 +131,7 @@ describe("studio settings route", () => {
     expect(getResponse.status).toBe(200);
     expect(body.settings?.gateway).toEqual({
       url: "ws://example.test:1234",
-      tokenConfigured: true,
+      token: "t",
     });
     expect(body.settings?.office?.["ws://example.test:1234"]).toEqual(
       expect.objectContaining({

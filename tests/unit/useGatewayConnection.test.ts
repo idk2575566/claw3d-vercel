@@ -269,4 +269,50 @@ describe("useGatewayConnection", () => {
     });
     expect(screen.getByTestId("token")).toHaveTextContent("local-token");
   });
+
+  it("replaces_legacy_saved_loopback_proxy_urls_with_runtime_local_defaults", async () => {
+    const { useGatewayConnection } = await setupAndImportHook(null);
+    const coordinator = {
+      loadSettings: async () => null,
+      loadSettingsEnvelope: async () => ({
+        settings: {
+          version: 1,
+          gateway: { url: "ws://localhost:18080/api/gateway/ws", tokenConfigured: true },
+          focused: {},
+          avatars: {},
+          analytics: {},
+          voiceReplies: {},
+          office: {},
+          deskAssignments: {},
+          standup: {},
+        },
+        localGatewayDefaults: { url: "ws://localhost:18789", tokenConfigured: true },
+      }),
+      schedulePatch: () => {},
+      flushPending: async () => {},
+    };
+
+    const Probe = () => {
+      const state = useGatewayConnection(coordinator);
+      return createElement(
+        "div",
+        null,
+        createElement("div", { "data-testid": "gatewayUrl" }, state.gatewayUrl),
+        createElement("div", { "data-testid": "token" }, state.token),
+        createElement(
+          "div",
+          { "data-testid": "localDefaultsUrl" },
+          state.localGatewayDefaults?.url ?? ""
+        )
+      );
+    };
+
+    render(createElement(Probe));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("gatewayUrl")).toHaveTextContent("ws://localhost:18789");
+    });
+    expect(screen.getByTestId("token")).toHaveTextContent("");
+    expect(screen.getByTestId("localDefaultsUrl")).toHaveTextContent("ws://localhost:18789");
+  });
 });

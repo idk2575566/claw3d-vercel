@@ -13,17 +13,32 @@ import {
 
 export const runtime = "nodejs";
 
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+
 const isPatch = (value: unknown): value is StudioSettingsPatch =>
   Boolean(value && typeof value === "object");
 
-export async function GET() {
+const shouldIncludeGatewayTokens = (request?: Request) => {
+  if (!request) return true;
+  try {
+    const url = new URL(request.url);
+    return LOOPBACK_HOSTNAMES.has(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+};
+
+export async function GET(request?: Request) {
   try {
     const settings = loadStudioSettings();
     const localGatewayDefaults = loadLocalGatewayDefaults();
+    const includeGatewayTokens = shouldIncludeGatewayTokens(request);
     return NextResponse.json(
       {
-        settings: sanitizeStudioSettings(settings),
-        localGatewayDefaults: sanitizeStudioGatewaySettings(localGatewayDefaults),
+        settings: includeGatewayTokens ? settings : sanitizeStudioSettings(settings),
+        localGatewayDefaults: includeGatewayTokens
+          ? localGatewayDefaults
+          : sanitizeStudioGatewaySettings(localGatewayDefaults),
       },
       { headers: { "Cache-Control": "no-store" } }
     );

@@ -60,6 +60,22 @@ const DEFAULT_GATEWAY_URL = "ws://localhost:18789";
 const OPENCLAW_CONFIG_FILENAME = "openclaw.json";
 
 const isRecord = (value) => Boolean(value && typeof value === "object");
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+
+const isLegacyProxyGatewayUrl = (value) => {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return (
+      (parsed.protocol === "ws:" || parsed.protocol === "wss:") &&
+      LOOPBACK_HOSTNAMES.has(parsed.hostname.toLowerCase()) &&
+      parsed.pathname === "/api/gateway/ws"
+    );
+  } catch {
+    return false;
+  }
+};
 
 const readOpenclawGatewayDefaults = (env = process.env) => {
   try {
@@ -86,10 +102,13 @@ const loadUpstreamGatewaySettings = (env = process.env) => {
   const settingsPath = resolveStudioSettingsPath(env);
   const parsed = readJsonFile(settingsPath);
   const gateway = parsed && typeof parsed === "object" ? parsed.gateway : null;
-  const url = typeof gateway?.url === "string" ? gateway.url.trim() : "";
+  const rawUrl = typeof gateway?.url === "string" ? gateway.url.trim() : "";
   const token = typeof gateway?.token === "string" ? gateway.token.trim() : "";
+  const defaults = readOpenclawGatewayDefaults(env);
+  const url = isLegacyProxyGatewayUrl(rawUrl)
+    ? defaults?.url || DEFAULT_GATEWAY_URL
+    : rawUrl;
   if (!token) {
-    const defaults = readOpenclawGatewayDefaults(env);
     if (defaults) {
       return {
         url: url || defaults.url,

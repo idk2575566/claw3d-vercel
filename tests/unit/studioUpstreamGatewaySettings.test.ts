@@ -55,4 +55,30 @@ describe("server studio upstream gateway settings", () => {
     expect(settings.url).toBe("ws://gateway.example:18789");
     expect(settings.token).toBe("tok-local");
   });
+
+  it("rewrites legacy loopback proxy urls back to the local upstream gateway", async () => {
+    tempDir = makeTempDir("studio-upstream-legacy-proxy-url");
+    process.env.OPENCLAW_STATE_DIR = tempDir;
+
+    fs.mkdirSync(path.join(tempDir, "claw3d"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempDir, "claw3d", "settings.json"),
+      JSON.stringify(
+        { gateway: { url: "ws://localhost:18080/api/gateway/ws", token: "" } },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    fs.writeFileSync(
+      path.join(tempDir, "openclaw.json"),
+      JSON.stringify({ gateway: { port: 18789, auth: { token: "tok-local" } } }, null, 2),
+      "utf8"
+    );
+
+    const { loadUpstreamGatewaySettings } = await import("../../server/studio-settings");
+    const settings = loadUpstreamGatewaySettings(process.env);
+    expect(settings.url).toBe("ws://localhost:18789");
+    expect(settings.token).toBe("tok-local");
+  });
 });
