@@ -451,6 +451,41 @@ export const syncGatewaySessionSettings = async ({
 const doctorFixHint =
   "Run `npx openclaw doctor --fix` on the gateway host (or `pnpm openclaw doctor --fix` in a source checkout).";
 
+const isGenericGatewayConnectError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.trim().toLowerCase();
+  if (!message) return false;
+  return (
+    message.includes("gateway closed (1006)") ||
+    message.includes("timed out connecting to the gateway") ||
+    message.includes("gateway closed (1011): connect failed")
+  );
+};
+
+const resolveStudioAccessAuthError = async (): Promise<string | null> => {
+  if (typeof window === "undefined" || typeof fetch !== "function") return null;
+  try {
+    const response = await fetch("/api/studio", { cache: "no-store" });
+    if (response.status !== 401 && response.status !== 403) return null;
+    const text = await response.text();
+    if (text) {
+      try {
+        const parsed = JSON.parse(text) as { error?: unknown };
+        if (typeof parsed.error === "string" && parsed.error.trim()) {
+          return parsed.error.trim();
+        }
+      } catch {
+        // ignore parse failure and fall back to status text below
+      }
+    }
+    return response.status === 401
+      ? "Studio access token required. Send the configured Studio access cookie and retry."
+      : "Studio access forbidden. Refresh the page and sign in again.";
+  } catch {
+    return null;
+  }
+};
+
 const formatGatewayError = (error: unknown) => {
   if (error instanceof GatewayResponseError) {
     if (error.code === "INVALID_REQUEST" && /invalid config/i.test(error.message)) {
@@ -685,7 +720,10 @@ export const useGatewayConnection = (
       retryAttemptRef.current = 0;
     } catch (err) {
       setConnectErrorCode(err instanceof GatewayResponseError ? err.code : null);
-      setError(formatGatewayError(err));
+      const authError = isGenericGatewayConnectError(err)
+        ? await resolveStudioAccessAuthError()
+        : null;
+      setError(authError ?? formatGatewayError(err));
     }
   }, [client, gatewayUrl, settingsCoordinator, token]);
 

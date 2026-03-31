@@ -4,7 +4,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 
 const ORIGINAL_ENV = { ...process.env };
 
-const setupAndImportHook = async (gatewayUrl: string | null, browserUrl = "http://localhost:3000/") => {
+const setupAndImportHook = async (
+  gatewayUrl: string | null,
+  browserUrl = "http://localhost:3000/",
+  options?: { closeOnStart?: { code: number; reason: string } }
+) => {
   const url = new URL(browserUrl);
   vi.spyOn(window, "location", "get").mockReturnValue({
     ...window.location,
@@ -54,12 +58,17 @@ const setupAndImportHook = async (gatewayUrl: string | null, browserUrl = "http:
 
       start() {
         this.connected = true;
+        if (options?.closeOnStart) {
+          window.setTimeout(() => {
+            this.opts.onClose?.(options.closeOnStart!);
+          }, 0);
+          return;
+        }
         this.opts.onHello?.({ type: "hello-ok", protocol: 1 });
       }
 
       stop() {
         this.connected = false;
-        this.opts.onClose?.({ code: 1000, reason: "stopped" });
       }
 
       async request<T = unknown>(method: string, params: unknown): Promise<T> {
@@ -301,6 +310,41 @@ describe("useGatewayConnection", () => {
       expect(screen.getByTestId("gatewayUrl")).toHaveTextContent("ws://localhost:18789");
     });
     expect(screen.getByTestId("token")).toHaveTextContent("local-token");
+  });
+
+  it("surfaces_studio_access_auth_error_when_ws_close_is_generic_1006", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () =>
+        JSON.stringify({
+          error: "Studio access token required. Send the configured Studio access cookie and retry.",
+        }),
+    } as Response);
+
+    const { useGatewayConnection } = await setupAndImportHook(
+      "ws://example.test:1234",
+      "http://localhost:3000/",
+      { closeOnStart: { code: 1006, reason: "" } }
+    );
+    const coordinator = {
+      loadSettings: async () => null,
+      schedulePatch: () => {},
+      flushPending: async () => {},
+    };
+
+    const Probe = () => {
+      const state = useGatewayConnection(coordinator);
+      return createElement("div", null, createElement("div", { "data-testid": "error" }, state.error ?? ""));
+    };
+
+    render(createElement(Probe));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("error").textContent).toContain(
+        "Studio access token required"
+      );
+    });
   });
 
   it("shows_explicit_error_on_vercel_preview_hosts", async () => {
