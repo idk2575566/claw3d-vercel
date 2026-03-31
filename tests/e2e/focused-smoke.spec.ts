@@ -8,6 +8,9 @@ test("loads office shell from root", async ({ page }) => {
   await expect
     .poll(() => new URL(page.url()).pathname)
     .toBe("/office");
-  await expect(page.getByRole("button", { name: "Open headquarters sidebar" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "CHAT" })).toBeVisible();
+  await expect(page.getByText("Loading...")).toBeHidden({ timeout: 15000 });
+  await expect(
+    page.getByRole("button", { name: "Open headquarters sidebar" }),
+  ).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("button", { name: "CHAT" })).toBeVisible({ timeout: 15000 });
 });

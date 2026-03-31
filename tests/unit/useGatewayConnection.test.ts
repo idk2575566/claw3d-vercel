@@ -4,7 +4,16 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 
 const ORIGINAL_ENV = { ...process.env };
 
-const setupAndImportHook = async (gatewayUrl: string | null) => {
+const setupAndImportHook = async (gatewayUrl: string | null, browserUrl = "http://localhost:3000/") => {
+  const url = new URL(browserUrl);
+  vi.spyOn(window, "location", "get").mockReturnValue({
+    ...window.location,
+    hostname: url.hostname,
+    host: url.host,
+    href: url.href,
+    origin: url.origin,
+    protocol: url.protocol,
+  } as Location);
   process.env = { ...ORIGINAL_ENV };
   if (gatewayUrl === null) {
     delete process.env.NEXT_PUBLIC_GATEWAY_URL;
@@ -75,6 +84,8 @@ const setupAndImportHook = async (gatewayUrl: string | null) => {
       token: string;
       localGatewayDefaults: { url: string; token: string } | null;
       useLocalGatewayDefaults: () => void;
+      error: string | null;
+      connect: () => Promise<void>;
     },
     captured,
   };
@@ -110,8 +121,8 @@ describe("useGatewayConnection", () => {
     });
   });
 
-  it("falls_back_to_local_default_when_env_unset", async () => {
-    const { useGatewayConnection } = await setupAndImportHook(null);
+  it("falls_back_to_local_default_when_env_unset_on_loopback_hosts", async () => {
+    const { useGatewayConnection } = await setupAndImportHook(null, "http://localhost:3000/");
     const coordinator = {
       loadSettings: async () => null,
       schedulePatch: () => {},
@@ -129,6 +140,28 @@ describe("useGatewayConnection", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("gatewayUrl")).toHaveTextContent("ws://localhost:18789");
+    });
+  });
+
+  it("leaves_gateway_blank_when_env_unset_on_remote_hosts", async () => {
+    const { useGatewayConnection } = await setupAndImportHook(null, "https://claw3d-preview.vercel.app/");
+    const coordinator = {
+      loadSettings: async () => null,
+      schedulePatch: () => {},
+      flushPending: async () => {},
+    };
+
+    const Probe = () =>
+      createElement(
+        "div",
+        { "data-testid": "gatewayUrl" },
+        useGatewayConnection(coordinator).gatewayUrl
+      );
+
+    render(createElement(Probe));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("gatewayUrl")).toHaveTextContent("");
     });
   });
 
@@ -268,6 +301,40 @@ describe("useGatewayConnection", () => {
       expect(screen.getByTestId("gatewayUrl")).toHaveTextContent("ws://localhost:18789");
     });
     expect(screen.getByTestId("token")).toHaveTextContent("local-token");
+  });
+
+  it("shows_explicit_error_on_vercel_preview_hosts", async () => {
+    const { useGatewayConnection } = await setupAndImportHook(null, "https://claw3d-preview.vercel.app/");
+    const coordinator = {
+      loadSettings: async () => null,
+      schedulePatch: () => {},
+      flushPending: async () => {},
+    };
+
+    const Probe = () => {
+      const state = useGatewayConnection(coordinator);
+      return createElement(
+        "div",
+        null,
+        createElement("div", { "data-testid": "error" }, state.error ?? ""),
+        createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => void state.connect(),
+            "data-testid": "connect",
+          },
+          "connect"
+        )
+      );
+    };
+
+    render(createElement(Probe));
+    fireEvent.click(screen.getByTestId("connect"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("error").textContent).toContain("Vercel preview is missing the Studio WebSocket proxy");
+    });
   });
 
   it("replaces_legacy_saved_loopback_proxy_urls_with_runtime_local_defaults", async () => {

@@ -1,7 +1,8 @@
 import { Billboard, Text } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
-import { memo, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { scheduleIdleCallback, cancelIdleCallback } from "@/lib/browser/idle";
 import { createDefaultAgentAvatarProfile } from "@/lib/avatars/profile";
 import {
   AGENT_SCALE,
@@ -558,31 +559,46 @@ export const AgentModel = memo(function AgentModel({
   const cuffColor = topStyle === "hoodie" ? "#d1d5db" : sleeveColor;
   const topAccentColor = topStyle === "jacket" ? "#1f2937" : cuffColor;
 
+  const [highResFaceTextureReady, setHighResFaceTextureReady] = useState(false);
+
+  useEffect(() => {
+    setHighResFaceTextureReady(false);
+    const handle = scheduleIdleCallback(() => {
+      setHighResFaceTextureReady(true);
+    }, 800);
+
+    return () => {
+      cancelIdleCallback(handle);
+    };
+  }, [skin]);
+
   const faceTexture = useMemo(() => {
     const canvas = document.createElement("canvas");
-    canvas.width = 64;
-    canvas.height = 64;
+    const textureSize = highResFaceTextureReady ? 64 : 16;
+    canvas.width = textureSize;
+    canvas.height = textureSize;
     const ctx = canvas.getContext("2d");
     if (!ctx) return new THREE.CanvasTexture(canvas);
 
+    const scale = textureSize / 64;
     ctx.fillStyle = skin;
-    ctx.fillRect(0, 0, 64, 64);
+    ctx.fillRect(0, 0, textureSize, textureSize);
     ctx.fillStyle = "rgba(255,255,255,0.14)";
-    ctx.fillRect(0, 0, 64, 10);
+    ctx.fillRect(0, 0, textureSize, 10 * scale);
     ctx.fillStyle = "rgba(196,122,84,0.18)";
     ctx.beginPath();
-    ctx.arc(18, 38, 7, 0, Math.PI * 2);
-    ctx.arc(46, 38, 7, 0, Math.PI * 2);
+    ctx.arc(18 * scale, 38 * scale, 7 * scale, 0, Math.PI * 2);
+    ctx.arc(46 * scale, 38 * scale, 7 * scale, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = "#d8a06e";
-    ctx.fillRect(30, 28, 4, 10);
-    ctx.fillRect(29, 37, 6, 2);
+    ctx.fillRect(30 * scale, 28 * scale, 4 * scale, 10 * scale);
+    ctx.fillRect(29 * scale, 37 * scale, 6 * scale, 2 * scale);
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.needsUpdate = true;
     return texture;
-  }, [skin]);
+  }, [highResFaceTextureReady, skin]);
 
   const resolvedSpeechText =
     showSpeech && speechText?.trim()

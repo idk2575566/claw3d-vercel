@@ -101,6 +101,22 @@ const parseConnectFailedCloseReason = (
 const DEFAULT_UPSTREAM_GATEWAY_URL =
   process.env.NEXT_PUBLIC_GATEWAY_URL || "ws://localhost:18789";
 const LOOPBACK_GATEWAY_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+const VERCEL_PREVIEW_HOST_SUFFIX = ".vercel.app";
+
+const getBrowserHostname = (): string => {
+  if (typeof window === "undefined") return "";
+  return window.location.hostname.trim().toLowerCase();
+};
+
+const isLoopbackBrowserHost = (): boolean => {
+  const hostname = getBrowserHostname();
+  return LOOPBACK_GATEWAY_HOSTNAMES.has(hostname);
+};
+
+const isVercelPreviewHost = (): boolean => {
+  const hostname = getBrowserHostname();
+  return hostname.endsWith(VERCEL_PREVIEW_HOST_SUFFIX);
+};
 
 const isLegacyProxyGatewayUrl = (value: string | null | undefined): boolean => {
   const raw = value?.trim() ?? "";
@@ -578,11 +594,14 @@ export const useGatewayConnection = (
         const hasSavedUrl = Boolean(savedGatewayUrl);
         const shouldReplaceLegacyProxyUrl =
           hasSavedUrl && isLegacyProxyGatewayUrl(savedGatewayUrl) && Boolean(normalizedDefaults?.url);
+        const runtimeFallbackGatewayUrl = isLoopbackBrowserHost()
+          ? DEFAULT_UPSTREAM_GATEWAY_URL
+          : "";
         const resolvedUrl = shouldReplaceLegacyProxyUrl
           ? normalizedDefaults!.url
           : hasSavedUrl
             ? gateway!.url
-            : normalizedDefaults?.url || DEFAULT_UPSTREAM_GATEWAY_URL;
+            : normalizedDefaults?.url || runtimeFallbackGatewayUrl;
         const nextGatewayUrl = resolvedUrl;
         const nextToken = shouldReplaceLegacyProxyUrl
           ? normalizedDefaults?.token ?? ""
@@ -606,7 +625,7 @@ export const useGatewayConnection = (
         if (!cancelled) {
           if (!loadedGatewaySettings.current) {
             loadedGatewaySettings.current = {
-              gatewayUrl: DEFAULT_UPSTREAM_GATEWAY_URL.trim(),
+              gatewayUrl: (isLoopbackBrowserHost() ? DEFAULT_UPSTREAM_GATEWAY_URL : "").trim(),
               token: "",
             };
           }
@@ -648,6 +667,11 @@ export const useGatewayConnection = (
     wasManualDisconnectRef.current = false;
     try {
       await settingsCoordinator.flushPending();
+      if (isVercelPreviewHost()) {
+        throw new Error(
+          "This Vercel preview is missing the Studio WebSocket proxy (/api/gateway/ws). Run Claw3D with `npm run start` on a real Node host (or open your local/Tailscale Studio URL) instead of using the Vercel preview for gateway connections."
+        );
+      }
       await client.connect({
         gatewayUrl: resolveStudioProxyGatewayUrl(),
         token,

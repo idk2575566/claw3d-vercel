@@ -48,6 +48,7 @@ import type { OfficeAnimationState } from "@/lib/office/eventTriggers";
 import type { StandupMeeting } from "@/lib/office/standup/types";
 import type { SkillStatusEntry } from "@/lib/skills/types";
 import { extractSpeechImage } from "@/lib/text/speech-image";
+import { scheduleIdleCallback, cancelIdleCallback } from "@/lib/browser/idle";
 import { MonitorImmersiveContent as MonitorImmersiveOverlay } from "@/features/retro-office/overlays/MonitorImmersiveContent";
 import {
   AGENT_RADIUS,
@@ -5026,15 +5027,17 @@ export function RetroOffice3D({
       setDeferEnvironment(true);
       return;
     }
-    const heavyContentTimer = window.setTimeout(() => {
+
+    const heavyContentIdle = scheduleIdleCallback(() => {
       setDeferHeavySceneContent(false);
     }, 900);
-    const environmentTimer = window.setTimeout(() => {
+    const environmentIdle = scheduleIdleCallback(() => {
       setDeferEnvironment(false);
     }, 1800);
+
     return () => {
-      window.clearTimeout(heavyContentTimer);
-      window.clearTimeout(environmentTimer);
+      cancelIdleCallback(heavyContentIdle);
+      cancelIdleCallback(environmentIdle);
     };
   }, [canvasInstanceKey, disable3D, webglContextLost]);
 
