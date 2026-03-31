@@ -2,8 +2,9 @@
 
 import { useGLTF } from "@react-three/drei";
 import type { ThreeEvent } from "@react-three/fiber";
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { scheduleIdleCallback, cancelIdleCallback } from "@/lib/browser/idle";
 import { SCALE } from "@/features/retro-office/core/constants";
 import {
   FURNITURE_ROTATION,
@@ -107,6 +108,106 @@ type InstancedFurnitureMeshDef = {
   receiveShadow: boolean;
 };
 
+function useIdleActivation(enabled = true, timeout = 700) {
+  const [active, setActive] = useState(!enabled);
+
+  useEffect(() => {
+    if (!enabled) {
+      setActive(true);
+      return;
+    }
+
+    setActive(false);
+    const handle = scheduleIdleCallback(() => {
+      setActive(true);
+    }, timeout);
+
+    return () => {
+      cancelIdleCallback(handle);
+    };
+  }, [enabled, timeout]);
+
+  return active;
+}
+
+function getPlaceholderDimensions(itemType: string, item?: FurnitureItem) {
+  const fallback = getItemBaseSize(item ?? { type: itemType, x: 0, y: 0, _uid: "placeholder" } as FurnitureItem);
+  const width = Math.max((item?.w ?? fallback.width) * SCALE, 0.16);
+  const depth = Math.max((item?.h ?? fallback.height) * SCALE, 0.16);
+
+  switch (itemType) {
+    case "chair":
+      return { width: width * 0.75, depth: depth * 0.75, height: 0.46, color: "#5b6472" };
+    case "bookshelf":
+    case "whiteboard":
+      return { width: width * 0.9, depth: depth * 0.35, height: 1.15, color: "#6b4a30" };
+    case "plant":
+    case "water_cooler":
+    case "lamp":
+      return { width: width * 0.45, depth: depth * 0.45, height: 0.95, color: "#4f6b56" };
+    case "computer":
+    case "printer":
+    case "coffee_machine":
+      return { width: width * 0.55, depth: depth * 0.55, height: 0.18, color: "#4b5563" };
+    default:
+      return { width: width * 0.88, depth: depth * 0.88, height: 0.72, color: FURNITURE_TINT[itemType] ?? "#7b6b5b" };
+  }
+}
+
+function FurniturePlaceholderBody({ itemType, itemColor, item }: { itemType: string; itemColor?: string; item?: FurnitureItem }) {
+  const dims = getPlaceholderDimensions(itemType, item);
+  const color = itemType === "beanbag" ? itemColor ?? "#8b5cf6" : itemColor ?? dims.color;
+
+  return (
+    <group>
+      <mesh position={[0, dims.height / 2, 0]} castShadow receiveShadow>
+        <boxGeometry args={[dims.width, dims.height, dims.depth]} />
+        <meshStandardMaterial color={color} roughness={0.88} metalness={0.04} />
+      </mesh>
+      <mesh position={[0, 0.015, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[dims.width * 1.08, dims.depth * 1.08]} />
+        <meshBasicMaterial color={color} transparent opacity={0.08} />
+      </mesh>
+    </group>
+  );
+}
+
+function InstancedFurniturePlaceholders({ itemType, items, onItemClick }: { itemType: string; items: FurnitureItem[]; onItemClick?: (itemUid: string) => void }) {
+  return (
+    <>
+      {items.map((item) => {
+        const [wx, , wz] = toWorld(item.x, item.y);
+        const yOffset = (FURNITURE_Y_OFFSET[itemType] ?? 0) + (item.elevation ?? 0);
+        const rotY = getItemRotationRadians(item);
+        const { width, height } = getItemBaseSize(item);
+        const pivotX = width * SCALE * 0.5;
+        const pivotZ = height * SCALE * 0.5;
+
+        return (
+          <group
+            key={item._uid}
+            position={[wx, yOffset, wz]}
+            onClick={
+              onItemClick
+                ? (event) => {
+                    event.stopPropagation();
+                    onItemClick(item._uid);
+                  }
+                : undefined
+            }
+          >
+            <group position={[pivotX, 0, pivotZ]} rotation={[0, rotY, 0]}>
+              <group position={[-pivotX, 0, -pivotZ]}>
+                <FurniturePlaceholderBody itemType={itemType} itemColor={item.color} item={item} />
+              </group>
+            </group>
+          </group>
+        );
+      })}
+    </>
+  );
+}
+
 const resolveFurnitureTemplate = (params: {
   glbPath: string;
   itemColor: string | undefined;
@@ -173,15 +274,7 @@ const buildFurnitureItemMatrix = (item: FurnitureItem, itemType: string) => {
     .multiply(scaleMatrix);
 };
 
-export function InstancedFurnitureItems({
-  itemType,
-  items,
-  onItemClick,
-}: {
-  itemType: string;
-  items: FurnitureItem[];
-  onItemClick?: (itemUid: string) => void;
-}) {
+function FullInstancedFurnitureItems({ itemType, items, onItemClick }: { itemType: string; items: FurnitureItem[]; onItemClick?: (itemUid: string) => void }) {
   const glbPath = FURNITURE_GLB[itemType] ?? FURNITURE_GLB.table_rect;
   const { scene } = useGLTF(glbPath);
   const template = useMemo(
@@ -215,10 +308,7 @@ export function InstancedFurnitureItems({
     () => items.map((item) => buildFurnitureItemMatrix(item, itemType)),
     [itemType, items],
   );
-  const itemUidByInstanceId = useMemo(
-    () => items.map((item) => item._uid),
-    [items],
-  );
+  const itemUidByInstanceId = useMemo(() => items.map((item) => item._uid), [items]);
 
   const handleClick = useMemo(
     () =>
@@ -269,7 +359,22 @@ export function InstancedFurnitureItems({
   );
 }
 
-export function FurnitureModel({
+export function InstancedFurnitureItems({ itemType, items, onItemClick }: { itemType: string; items: FurnitureItem[]; onItemClick?: (itemUid: string) => void }) {
+  const activated = useIdleActivation(items.length > 0, 900);
+
+  if (items.length === 0) return null;
+  if (!activated) {
+    return <InstancedFurniturePlaceholders itemType={itemType} items={items} onItemClick={onItemClick} />;
+  }
+
+  return (
+    <Suspense fallback={<InstancedFurniturePlaceholders itemType={itemType} items={items} onItemClick={onItemClick} />}>
+      <FullInstancedFurnitureItems itemType={itemType} items={items} onItemClick={onItemClick} />
+    </Suspense>
+  );
+}
+
+function FullFurnitureModel({
   item,
   isSelected,
   isHovered,
@@ -368,13 +473,69 @@ export function FurnitureModel({
   );
 }
 
-export function PlacementGhost({
-  itemType,
-  position,
-}: {
-  itemType: string;
-  position: [number, number, number];
-}) {
+function FurnitureModelPlaceholder({
+  item,
+  isSelected,
+  isHovered,
+  editMode,
+  onPointerDown,
+  onPointerOver,
+  onPointerOut,
+  onClick,
+}: InteractiveFurnitureModelProps) {
+  const itemType = resolveItemTypeKey(item);
+  const [wx, , wz] = toWorld(item.x, item.y);
+  const yOffset = (FURNITURE_Y_OFFSET[itemType] ?? 0) + (item.elevation ?? 0);
+  const rotY = getItemRotationRadians(item);
+  const { width, height } = getItemBaseSize(item);
+  const pivotX = width * SCALE * 0.5;
+  const pivotZ = height * SCALE * 0.5;
+  const highlightColor = isSelected ? "#fbbf24" : isHovered && editMode ? "#4a90d9" : item.color;
+
+  return (
+    <group
+      position={[wx, yOffset, wz]}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        onPointerDown(item._uid);
+      }}
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        onPointerOver(item._uid);
+      }}
+      onPointerOut={(event) => {
+        event.stopPropagation();
+        onPointerOut();
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick?.(item._uid);
+      }}
+    >
+      <group position={[pivotX, 0, pivotZ]} rotation={[0, rotY, 0]}>
+        <group position={[-pivotX, 0, -pivotZ]}>
+          <FurniturePlaceholderBody itemType={itemType} itemColor={highlightColor} item={item} />
+        </group>
+      </group>
+    </group>
+  );
+}
+
+export function FurnitureModel(props: InteractiveFurnitureModelProps) {
+  const activated = useIdleActivation(true, 950);
+
+  if (!activated) {
+    return <FurnitureModelPlaceholder {...props} />;
+  }
+
+  return (
+    <Suspense fallback={<FurnitureModelPlaceholder {...props} />}>
+      <FullFurnitureModel {...props} />
+    </Suspense>
+  );
+}
+
+function FullPlacementGhost({ itemType, position }: { itemType: string; position: [number, number, number] }) {
   const glbPath = FURNITURE_GLB[itemType] ?? FURNITURE_GLB.table_rect;
   const { scene } = useGLTF(glbPath);
   const template = useMemo(
@@ -402,4 +563,30 @@ export function PlacementGhost({
   );
 }
 
-[...new Set(Object.values(FURNITURE_GLB))].forEach((path) => useGLTF.preload(path));
+function PlacementGhostPlaceholder({ itemType, position }: { itemType: string; position: [number, number, number] }) {
+  const rotY = FURNITURE_ROTATION[itemType] ?? 0;
+
+  return (
+    <group position={position} rotation={[0, rotY, 0]}>
+      <FurniturePlaceholderBody itemType={itemType} />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+        <planeGeometry args={[0.8, 0.8]} />
+        <meshBasicMaterial color="#fbbf24" transparent opacity={0.25} />
+      </mesh>
+    </group>
+  );
+}
+
+export function PlacementGhost({ itemType, position }: { itemType: string; position: [number, number, number] }) {
+  const activated = useIdleActivation(true, 700);
+
+  if (!activated) {
+    return <PlacementGhostPlaceholder itemType={itemType} position={position} />;
+  }
+
+  return (
+    <Suspense fallback={<PlacementGhostPlaceholder itemType={itemType} position={position} />}>
+      <FullPlacementGhost itemType={itemType} position={position} />
+    </Suspense>
+  );
+}
